@@ -1,0 +1,23 @@
+#!/bin/sh -e
+
+if [ -z "$1" ]; then
+	echo "usage: mountdev mountpoint"
+	exit 1
+fi
+
+# Check that ruleset 31415 is unused
+if devfs rule -s 31415 show | grep .; then
+	echo "Ruleset 31415 is already in use!"
+	exit 1
+fi
+
+# Create the ruleset
+devfs rule -s 31415 add hide
+for P in null zero random urandom stdin stdout stderr fd fd/0 fd/1 fd/1; do
+	devfs rule -s 31415 add path $P unhide
+done
+
+# Create the devfs mount
+mount -t devfs devfs "$1"
+devfs -m "$1" ruleset 31415
+devfs -m "$1" rule applyset

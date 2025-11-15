@@ -1,0 +1,12 @@
+#!/bin/sh -e
+
+if [ -z "$1" ]; then
+	echo "usage: umountdev mountpoint"
+	exit 1
+fi
+
+# Unmount
+umount "$1"
+
+# Clean up the ruleset
+devfs rule -s 31415 delset

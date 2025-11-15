@@ -1,0 +1,139 @@
+BUILDER SETUP
+=============
+Install ports: awscli, doas, git, jq
+Install doas.conf as /usr/local/etc/doas.conf with appropriate user name
+Install {mountdev,umountdev} in /usr/local/sbin
+Set security.bsd.unprivileged_chroot=1 in /etc/sysctl.conf
+
+AWS SETUP
+=========
+
+* IAM -> Users -> Create User
+  * User name "releasesigning"
+  * Attach policies directly
+* IAM -> Users -> releasesigning -> Security credentials
+  * Assign MFA device
+  * Device name "releasesigning"
+  * Authenicator app
+  * Add to Google Authenticator
+  * Record ARN; this gets passed to init.sh
+* KMS -> Create a key
+  * Asymmetric
+  * Sign and verify
+  * RSA_2048
+  * Key material from KMS
+  * Single-region key
+  * Alias "15pkgbase"
+  * Description "Key used for signing 15.x pkgbase repositories"
+  * No key administrators
+  * Key user "releasesigning"
+  * Edit policy
+    * Add to policy:
+	"Condition": { "NumericLessThan": { "aws:MultiFactorAuthAge": "900"}}
+    * Strip permissions down to DescribeKey, GetPublicKey and Sign
+  * Record key id; this gets passed to init.sh
+* IAM -> Users -> releasesigning
+  * Permissions -> Add permissions -> Create inline policy
+  * KMS:DescribeKey, KMS:Sign
+  * Resources: Any in this account
+  * Policy name: releasesigning
+* IAM -> Users -> releasesigning
+  * Create access key
+  * Paste credentials into `aws configure --profile signing`
+* S3 -> Create bucket
+  * Bucket name pkgbase.freebsd.org
+  * Otherwise default settings; "block all public access" turned on
+* IAM -> Users -> Create User
+  * User name "releaseupload"
+  * Attach policies directly
+* IAM -> Users -> releaseupload
+  * Permissions -> Add permissions -> Create inline policy
+  * S3:PutObject
+  * Resources -> object -> Add ARNs
+    * Bucket name pkgbase.freebsd.org
+    * Object name *
+  * Policy name releaseupload
+* IAM -> Users -> releaseupload
+  * Create access key
+  * Paste credentials into `aws configure --profile upload`
+* CloudFront -> Distributions -> Create distribution
+  * Distribution name cloudfront.aws.pkgbase.freebsd.org
+  * Leave "Domain" empty for now
+  * Origin type Amazon S3
+  * Select the bucket we created in the previous step
+  * Customize cache settings
+    * Viewer protocol policy HTTP and HTTPS
+  * WAF: Do not enable security protections
+  * Create distribution
+  * Behaviours -> Edit behaviour #0
+    * Legacy cache settings
+    * Object caching: Customize
+    * Default TTL 60 seconds
+  * Behaviours -> Create Behaviour
+    * Path /*/*/Hashed/*
+    * Compress objects automatically No
+    * Viewer protocol HTTP and HTTPS
+    * CachingOptimized policy
+    * Note this must be top precedence
+* Route53 -> Create hosted zones
+  * Domain name aws.pkgbase.freebsd.org
+  * Create A and AAAA for cloudfront.
+    * Alias to the blahblahblah.cloudfront.net distribution name
+  * Create CAA for cloudfront.
+    * "0 issue amazonaws.com"
+  * Copy NS records and add them to freebsd.org for zone delegation
+  * Create SRV record:
+	_https._tcp.pkgbase.freebsd.org SRV record 1 100 443 \
+		cloudfront.aws.pkgbase.freebsd.org
+* CloudFront -> Distributions -> Add domain
+  * Add cloudfront.aws.pkgbase.freebsd.org
+  * Not wildcard, do not include apex
+  * Create certificate
+
+SCRIPTS
+=======
+
+The scripts should be copied into a separate directory for each "build"
+(BETA/RC or RELEASE) and run from there.  Subdirectories are created from
+each of the per-build directories.
+
+It is anticipated that the scripts will change over time with future FreeBSD
+releases, e.g. to use different HSM infrastructure.
+
+init.sh: Set up a new build.
+	sh init.sh BUILDTYPE ANNOUNCEMAIL PORTSBRANCH SRCBRANCH SRCHASH KMSID MFAID PUBDIR PUBNAME
+	* BUILDTYPE is "snapshots" or "releases" aka where on download.f.o the
+	release bits are stored.
+	* ANNOUNCEMAIL is the announcement containing hashes of release files.
+	* PORTSBRANCH is the ports branch (for BETAs) or tag (for RCs/RELEASE).
+	* SRCBRANCH is stable/X or releng/X.Y.
+	* SRCHASH is the commit from which the build was run.
+	* KMSID is the AWS KMS key ID.
+	* MFAID is the AWS MFA ID.
+	* PUBDIR is the staging directory for bits to go onto pkgbase.f.o.
+	* PUBNAME is the name of the build, e.g. base_release_0_beta4.
+approve-init.sh: Approve the results of init.sh; create signed repositories.
+publish.sh: Copy the repositories into the staging directory.
+	sh publish.sh ANOTHERNAME
+	* If ANOTHERNAME is specified, copy into this name.  Used to allow us
+	to have a base_release_Y which tracks the latest X.Y-BETA* build.
+update.sh: Do a new build including patches in /patches/
+	* The patches must apply cleanly via 'git am'.
+approve-update.sh: Approve the results of update.sh; create signed repositories.
+upload.sh: Upload to the S3 bucket backing pkgbase.freebsd.org.
+	* This script hard-codes the S3 bucket name so it will need editing if
+	anyone else wants to use this code.
+	* THIS UPLOADS ALL OF THE BUILDS, not just the one from the current
+	directory.
+
+EXAMPLE COMMANDS
+================
+/usr/bin/time -h sh init.sh releases 15-release-mail 2025Q4 releng/15.0 3447fc070cc205671ac33e1582c023033094de7f \
+    12345678-1234-1234-1234-1234567890ab arn:aws:iam::123456789012:mfa/releasesigning ~/stage base_release_0_beta5
+sh approve-init.sh
+cp ~/000* patches/
+/usr/bin/time -h sh update.sh
+sh approve-update.sh
+sh publish.sh
+sh publish.sh base_release_0
+sh upload.sh
