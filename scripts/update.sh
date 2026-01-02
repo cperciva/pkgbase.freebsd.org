@@ -15,10 +15,14 @@ chroot -n work/buildroot.src git -C /usr/src config user.name "FreeBSD pkgbase r
 if ls patches | grep .; then
 	for pfile in patches/*; do
 		echo "Applying patch $pfile..."
-		cat $pfile |
-		   chroot -n work/buildroot.src git -C /usr/src am
+		BHEAD=$(git bundle list-heads patches/p0001.bundle | awk '{ print $2 }')
+		tar -cf- $pfile | chroot -n work/buildroot.src tar -xf- -C /root/
+		chroot -n work/buildroot.src git -C /usr/src pull /root/$pfile \
+		    ${BHEAD}
+		chroot -n work/buildroot.src rm /root/$pfile
 	done
 fi
+chroot -n work/buildroot.src git -C /usr/src log --pretty=oneline $(cat data/srccommit)..@
 doas umountdev work/buildroot.src/dev
 mkdir work/src.patched
 chroot -n work/buildroot.src tar -cf- -C /usr/src . |

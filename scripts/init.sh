@@ -61,6 +61,7 @@ sh -e build-git.sh $PORTSBRANCH
 # Check out src
 git clone --branch ${SRCBRANCH} https://git.freebsd.org/src.git data/src
 git -C data/src reset --hard ${SRCCOMMIT}
+echo ${SRCCOMMIT} > data/srcommit
 
 # Rebuild all of the architectures
 for ARCH in $(cat data/arches); do
